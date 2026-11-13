@@ -1100,13 +1100,27 @@ void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, co
             const auto & name_node = arena.get(name_id);
             const auto & args_node = arena.get(args_id);
 
-            if (!name_node.is_partial) {
+            // Only emit once the args dict is complete. Emitting while the model is
+            // still generating leaks a truncated call and confuses the harness, which
+            // then acts on a half-built tool call. Wait for the closing brace instead.
+            if (!args_node.is_partial) {
                 common_chat_tool_call call;
                 call.name = std::string(name_node.text);
                 if (!args_node.children.empty()) {
                     call.arguments = gemma4_to_json(arena, args_node.children[0]);
+                } else {
+                    call.arguments = "{}";
                 }
                 result.tool_calls.push_back(call);
+            } else {
+                // The model has emitted the tool name but is still generating args.
+                // Announce the name once so the harness stays verbose and does not
+                // treat the mid-generation pause as end-of-turn.
+                if (arena.mark(name_id)) {
+                    common_chat_tool_call call;
+                    call.name = std::string(name_node.text);
+                    result.tool_calls.push_back(call);
+                }
             }
         }
 

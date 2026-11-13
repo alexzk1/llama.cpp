@@ -8,6 +8,7 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <functional>
@@ -104,6 +105,9 @@ using common_peg_ast_visitor = std::function<void(const common_peg_ast_node & no
 
 class common_peg_ast_arena {
     std::vector<common_peg_ast_node> nodes_;
+    // Mappers may use these to mark IDs for their own purposes, alive between instantiations.
+    // FIXME: find a way to drop 'mutable'.
+    mutable std::unordered_set<common_peg_ast_id> mappers_marks;
   public:
     common_peg_ast_id add_node(
         const std::string & rule,
@@ -133,6 +137,8 @@ class common_peg_ast_arena {
     void visit(const common_peg_parse_result & result, const common_peg_ast_visitor & visitor) const;
 
     std::string dump();
+
+    bool mark(common_peg_ast_id id) const { return mappers_marks.insert(id).second; }
 };
 
 struct common_peg_parse_result {
