@@ -21,10 +21,33 @@ struct depth_guard {
     ~depth_guard() { depth--; }
 };
 
+// Tokens that can never appear inside a container value. A container that cannot close normally
+// closes at the next such token (virtual close), so a broken tool call stays parseable and the
+// parser can resync to the next call. LIFO order comes free from recursion: the innermost
+// container closes first, then its parent.
+static const std::vector<std::string> kControlTokens = {
+    "<|tool_call>", "<tool_call|>", "<|channel>", "<channel|>", "<|turn>", "<|tool_response>", "<|tool_response|>",
+};
+
 // Gemma 4 value parsers
 void gemma4_value_rules(common_chat_peg_builder & p) {
     // The tags are what gemma4_to_json() in the mapper reads, the rules may wrap them freely.
-    p.rule("gemma4-string", p.tag(gemma4::STRING, p.literal("<|\"|>") + p.tag(gemma4::STRING_CONTENT, p.until("<|\"|>")) + p.literal("<|\"|>")));
+    // Control tokens can never appear inside a string. If a string is never closed, stop at the
+    // first control token and close there (virtual close) instead of letting p.until() swallow the
+    // closing delimiter of the next tool call.
+    auto string_close = p.literal("<|\"|>");
+    string_close |= p.peek(p.literal("<|tool_call>"));
+    string_close |= p.peek(p.literal("<tool_call|>"));
+    string_close |= p.peek(p.literal("<|channel>"));
+    string_close |= p.peek(p.literal("<channel|>"));
+    string_close |= p.peek(p.literal("<|turn>"));
+    string_close |= p.peek(p.literal("<|tool_response>"));
+    string_close |= p.peek(p.literal("<|tool_response|>"));
+
+    p.rule("gemma4-string", p.tag(gemma4::STRING, p.literal("<|\"|>")
+        + p.tag(gemma4::STRING_CONTENT, p.until_one_of({
+            "<|\"|>", "<|tool_call>", "<tool_call|>", "<|channel>", "<channel|>", "<|turn>", "<|tool_response>", "<tool_response|>"
+        })) + string_close));
 
     p.rule("gemma4-bool", p.tag(gemma4::BOOL, p.json_bool()));
 
@@ -42,13 +65,18 @@ void gemma4_value_rules(common_chat_peg_builder & p) {
 
     p.rule("gemma4-dict-kv", p.tag(gemma4::DICT_KV, p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value")));
 
+    // A container that cannot close normally closes at the next control token instead. This keeps a
+    // broken tool call parseable ("valid trash") so the parser can resync to the next call. LIFO
+    // order comes free from recursion: the innermost container closes first, then its parent.
+    auto resync = p.until_one_of(kControlTokens);
+
     p.rule("gemma4-dict", [&]() {
         auto ws = p.space();
         auto member = p.ref("gemma4-dict-kv");
         auto members = p.sequence({member, p.zero_or_more(p.sequence({p.literal(","), ws, member}))});
         return p.tag(gemma4::DICT, p.sequence({
             p.literal("{"), ws,
-            p.choice({p.literal("}"), p.sequence({members, ws, p.literal("}")})})
+            p.choice({p.literal("}"), p.sequence({members, ws, resync})})
         }));
     });
 
@@ -58,7 +86,7 @@ void gemma4_value_rules(common_chat_peg_builder & p) {
         auto elements = p.sequence({value, p.zero_or_more(p.sequence({p.literal(","), ws, value}))});
         return p.tag(gemma4::ARRAY, p.sequence({
             p.literal("["), ws,
-            p.choice({p.literal("]"), p.sequence({elements, ws, p.literal("]")})})
+            p.choice({p.literal("]"), p.sequence({elements, ws, resync})})
         }));
     });
 
@@ -202,8 +230,8 @@ class gemma4_schema_parser {
         auto ws       = p_.space();
         auto item     = node.items && shaped(*node.items) ? visit(*node.items, name + "-item") : p_.ref("gemma4-value");
         auto elements = item + p_.zero_or_more(p_.literal(",") + ws + item);
-        return p_.rule(name, p_.tag(gemma4::ARRAY,
-            p_.literal("[") + ws + (p_.literal("]") | (elements + ws + p_.literal("]")))));
+        auto close = p_.choice({p_.literal("]"), p_.sequence({elements, ws, p_.literal("]")}), p_.until_one_of(kControlTokens)});
+        return p_.rule(name, p_.tag(gemma4::ARRAY, p_.literal("[") + ws + close));
     }
 
     common_peg_parser visit_tuple(const common_chat_schema_tuple & node, const std::string & name) {
@@ -242,7 +270,7 @@ class gemma4_schema_parser {
             if (node.additional_properties) {
                 return p_.ref("gemma4-dict");
             }
-            return p_.rule(name, p_.tag(gemma4::DICT, p_.literal("{") + ws + p_.literal("}")));
+            return p_.rule(name, p_.tag(gemma4::DICT, p_.literal("{") + ws + p_.choice({p_.literal("}"), p_.until_one_of(kControlTokens)})));
         }
 
         std::optional<common_peg_parser> rest;
@@ -274,7 +302,10 @@ class gemma4_schema_parser {
             first = first_i;
         }
 
-        return p_.rule(name, p_.tag(gemma4::DICT, p_.literal("{") + ws + *first + ws + p_.literal("}")));
+        // Close with the proper "}", or, if a value is broken and the members cannot all parse,
+        // virtually close at the next control token so the tool call stays parseable.
+        auto close = p_.choice({p_.literal("}"), p_.sequence({*first, ws, p_.literal("}")}), p_.until_one_of(kControlTokens)});
+        return p_.rule(name, p_.tag(gemma4::DICT, p_.literal("{") + ws + close));
     }
 };
 
