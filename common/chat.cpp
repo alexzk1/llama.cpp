@@ -1850,7 +1850,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             msg.role = "assistant";
             std::unique_ptr<common_chat_peg_mapper> mapper;
             if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
-                mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+                mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg,
+                    is_partial,params.parallel_tool_calls ? -1 : 1);
             } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3) {
                 mapper = std::make_unique<common_chat_peg_minimax_m3_mapper>(msg);
             } else {
@@ -1874,7 +1875,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
 
     std::unique_ptr<common_chat_peg_mapper> mapper;
     if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
-        mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+        mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg, is_partial, params.parallel_tool_calls ? -1 : 1);
     } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3) {
         mapper = std::make_unique<common_chat_peg_minimax_m3_mapper>(msg);
     } else {
@@ -1915,6 +1916,7 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
                                             : common_chat_input(applied.generation_prompt);
     parser_params.debug             = params.debug;
     parser_params.parser            = std::move(applied.parser);
+    parser_params.parallel_tool_calls = inputs.parallel_tool_calls;
 
     delimiters = std::move(applied.message_delimiters);
 

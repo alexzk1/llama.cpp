@@ -349,6 +349,8 @@ struct common_chat_parser_params {
     common_chat_input  generation_prompt;
     bool               debug  = false; // Enable debug output for PEG parser
     common_peg_arena   parser = {};
+    // Whether the client allows multiple tool calls. Drives tools_limit on the mapper.
+    bool               parallel_tool_calls = false;
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
         format  = chat_params.format;

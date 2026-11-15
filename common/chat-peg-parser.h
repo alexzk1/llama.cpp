@@ -47,7 +47,14 @@ class common_chat_peg_gemma4_mapper : public common_chat_peg_mapper {
     static constexpr const char * DICT_KEY_NAME  = "gemma4-dict-key-name";
 
     common_chat_peg_gemma4_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
+    common_chat_peg_gemma4_mapper(common_chat_msg & msg, bool is_partial_stream, int tools_limit)
+        : common_chat_peg_mapper(msg), is_partial_stream(is_partial_stream), tools_limit(tools_limit) {}
     virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
+
+    // Tool-call stream control. is_partial_stream: hold calls (emit nothing) until the turn ends.
+    // tools_limit: max calls to keep on the final list (-1 = unlimited).
+    bool is_partial_stream = false;
+    int  tools_limit       = -1;
   private:
     void visit(const common_peg_ast_arena & arena, common_peg_ast_id id);
 };
