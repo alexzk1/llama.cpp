@@ -1082,17 +1082,34 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
 void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id) {
     const auto & node = arena.get(id);
 
-    if (node.tag == "reasoning") {
+    if (node.tag == common_chat_peg_builder::REASONING) {
         result.reasoning_content += node.sanitized_text();
         return;
     }
 
-    if (node.tag == "content") {
+    if (node.tag == common_chat_peg_builder::CONTENT) {
         result.content += node.sanitized_text();
         return;
     }
 
-    if (node.tag == "tool") {
+    // A top-level "thought" node between tool calls means Gemma restarted the turn:
+    //   <tool1><thought><tool2>  =>  "cancel tool1, use tool2".
+    // This pattern is not in the official protocol, but Gemma uses it, so we clear
+    // the earlier tool calls. Use node.rule (not node.tag): the name must match the
+    // "thought" rule defined in gemma4.cpp.
+    if (node.rule == "thought")
+    {
+        result.tool_calls.clear();
+    }
+
+    if (node.tag == common_chat_peg_builder::TOOL) {
+        // Do nothing until server::finish() is called and we have whole input produced by Gemma.
+        // We need to detect cases like <tool_call1><tool_call2><CoT><tool_call3>
+        // valid here (what model actually wants to do) is <tool_call3>.
+        if (is_partial_stream)
+        {
+            return;
+        }
         auto name_id = arena.find_by_tag(node, "tool-name");
         auto args_id = arena.find_by_tag(node, "tool-args");
 
