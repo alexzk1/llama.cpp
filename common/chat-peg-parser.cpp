@@ -984,6 +984,11 @@ void common_chat_peg_gemma4_mapper::from_ast(const common_peg_ast_arena & arena,
     for (const auto & node : result.nodes) {
         visit(arena, node);
     }
+    // The grammar parses unlimited calls. Trim to the caller's tools_limit here.
+    // tools_limit < 0 means no limit (parallel mode).
+    if (tools_limit >= 0 && this->result.tool_calls.size() > (size_t) tools_limit) {
+        this->result.tool_calls.resize((size_t) tools_limit);
+    }
 }
 
 using gemma4 = common_chat_peg_gemma4_mapper;

@@ -412,10 +412,13 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
             // Gemma may emit a reset/restart thought between calls. The thought rule matches a COT
             // block or succeeds empty when not at a channel, so prepending it to each iteration lets
             // an optional COT sit between calls without breaking the repeat.
+            // The grammar always parses unlimited tool calls. The mapper enforces the
+            // caller's tools_limit (-1 = no limit), so non-parallel mode trims there
+            // instead of dropping extra calls at the grammar.
             auto tool_call = p.trigger_rule("tool-call", p.repeat(
                 thought + "<|tool_call>call:" + tool_choice + "<tool_call|>",
                 /* min = */ inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0,
-                /* max = */ inputs.parallel_tool_calls ? -1 : 1
+                /* max = */ -1
             ));
 
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
