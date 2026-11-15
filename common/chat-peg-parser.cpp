@@ -1112,15 +1112,6 @@ void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, co
                     call.arguments = "{}";
                 }
                 result.tool_calls.push_back(call);
-            } else {
-                // The model has emitted the tool name but is still generating args.
-                // Announce the name once so the harness stays verbose and does not
-                // treat the mid-generation pause as end-of-turn.
-                if (arena.mark(name_id)) {
-                    common_chat_tool_call call;
-                    call.name = std::string(name_node.text);
-                    result.tool_calls.push_back(call);
-                }
             }
         }
 
