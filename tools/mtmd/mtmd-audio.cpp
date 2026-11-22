@@ -270,6 +270,14 @@ static void ifft(const mtmd_audio_cache & cache, float * in, int N, float * out)
     fft_impl<true, false>(cache, in, N, out);
 }
 
+void mtmd_audio_fft(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    fft(cache, in, N, out);
+}
+
+void mtmd_audio_ifft(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    ifft(cache, in, N, out);
+}
+
 static void mtmd_audio_fill_entries(std::vector<mtmd_audio_mel> & mels, bool shape_only, std::vector<mtmd_image_f32> & entries) {
     entries.clear();
     for (auto & mel : mels) {
@@ -586,9 +594,10 @@ bool mtmd_audio_preprocessor_whisper::process(const float *                 samp
 //
 // Matches the Python WhisperFeatureExtractor called with truncation=False:
 //   - reflection padding of n_fft/2 samples at each end (center=True)
-//   - Whisper-style log10 + (max-8)/4 normalization applied to full audio
-//   - output split into ≤30s (3000 mel frames) windows, each padded to a
-//     multiple of 200 frames (n_window * 2) for the cgraph batch view
+//   - the last STFT frame is dropped, giving n_samples / hop_length frames
+//   - Whisper-style log10 + (max-8)/4 normalization over the kept frames
+//   - output split into 800-frame (n_window_infer) windows; the graph
+//     zero-pads the last 100-frame chunk
 //
 
 void mtmd_audio_preprocessor_qwen3a::initialize() {
@@ -640,11 +649,17 @@ bool mtmd_audio_preprocessor_qwen3a::process(const float *                 sampl
         return false;
     }
 
-    // Whisper-style normalization: clamp to (max - 8), scale to [-1, 1]
-    {
+    // WhisperFeatureExtractor drops the last STFT frame, keeping n_samples / hop_length frames;
+    // sub-hop clips would give 0 frames, clamp to 1 so the cgraph stays non-empty
+    const int64_t n_eff = std::max<int64_t>(1, std::min(mel_full.n_len - 1, (int64_t)(n_samples / hparams.audio_hop_len)));
+
+    // Whisper-style normalization over the kept frames: clamp to (max - 8), scale to [-1, 1]
+    if (!shape_only) {
         double mmax = -1e20;
-        for (float v : mel_full.data) {
-            if (v > mmax) mmax = v;
+        for (int64_t m = 0; m < mel_full.n_mel; m++) {
+            for (int64_t t = 0; t < n_eff; t++) {
+                mmax = std::max(mmax, (double)mel_full.data[m * mel_full.n_len + t]);
+            }
         }
         mmax -= 8.0;
         for (float & v : mel_full.data) {
@@ -652,25 +667,16 @@ bool mtmd_audio_preprocessor_qwen3a::process(const float *                 sampl
         }
     }
 
-    // The effective frame count: center-padded STFT gives ~n_samples/hop_length frames.
-    // We take min(mel_full.n_len, n_samples/hop + 1) to avoid including excess frames.
-    const int64_t n_eff = std::min(mel_full.n_len,
-                               (int64_t)(n_samples / hparams.audio_hop_len) + 1);
-
     // Split into inference windows matching n_window_infer=800 from model config.
-    // Each window is padded to the next multiple of chunk_size for the cgraph.
     // The mtmd caller loops over output entries, so long audio is handled automatically.
-    const int chunk_size  = 100; // conv sub-chunk size (n_window * 2, n_window=50)
     const int window_size = 800; // mel frames per forward pass (n_window_infer=800)
 
     for (int64_t off = 0; off < n_eff; off += window_size) {
         const int64_t win_eff  = std::min((int64_t)window_size, n_eff - off);
-        const int64_t n_chunks  = (win_eff + chunk_size - 1) / chunk_size;
-        const int64_t n_padded  = n_chunks * chunk_size;
 
         mtmd_audio_mel out;
         out.n_mel     = mel_full.n_mel;
-        out.n_len     = n_padded;
+        out.n_len     = win_eff;
         out.n_len_org = win_eff;
         out.data.assign((size_t)out.n_mel * (size_t)out.n_len, 0.0f);
         for (int64_t m = 0; m < out.n_mel; m++) {
@@ -2240,6 +2246,16 @@ bool mtmd_audio_preprocessor_pockettts::process(const float *                 sa
 
     output.push_back(std::move(out));
     return true;
+}
+
+bool mtmd_audio_preprocessor_spk_ref::process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const {
+    const size_t max_samples = (size_t) max_seconds * hparams.audio_sample_rate;
+    if (n_samples > max_samples) {
+        LOG_WRN("%s: speaker reference is %.1f s, truncating to the first %d s\n", __func__,
+                (double) n_samples / hparams.audio_sample_rate, max_seconds);
+        n_samples = max_samples;
+    }
+    return mtmd_audio_preprocessor_muse_spark_audio::process(samples, n_samples, output, shape_only);
 }
 
 //
